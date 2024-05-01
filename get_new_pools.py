@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import os
 import asyncio
 import websockets
@@ -5,12 +7,12 @@ import json
 from solana.rpc.api import Client
 from solders.pubkey import Pubkey  # type: ignore
 from solders.signature import Signature  # type: ignore
-import pandas as pd
 from tabulate import tabulate
 from datetime import datetime
 from utils import contains_word_from_list, save_token_address
 from definedfi import _getTokenInfo, _getPairMetadata
 import requests
+import ssl
 
 import logging
 logger = logging.getLogger('websockets')
@@ -46,15 +48,6 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
-
-if os.path.isfile(log_file_path):
-    print('Restarting...')
-    logging.info('Restarting...')
-else:
-    print('Starting...')
-    logging.info('Starting...')
-
-REQUESTS = 0
 
 def rugcheck(token_address: Pubkey):
     print('Inside rugcheck')
@@ -100,8 +93,8 @@ def rugcheck(token_address: Pubkey):
         exit(1)
 
 # Sending contract address to a Telegram Channel
-# The channel is continuously scaped by a trading bot
-# The bot will parse the th contract address and auto buy the token
+# The channel is continuously scraped by a trading bot
+# The bot will parse the contract address and auto buy the token
 # Or just retrieve information about the token if auto buy is not activated
 def send_contract_to_tg(token_address: Pubkey, data: dict):
     bot_token = telegram_bot_token
@@ -135,7 +128,6 @@ async def getTokensWithBackoff(str_signature: str):
     raise Exception("Exceeded maximum retries. Unable to get tokens.")
 
 async def getTokens(str_signature: str):
-    global REQUESTS
     signature = Signature.from_string(str_signature)
     transaction = solana_client.get_transaction(
         signature, encoding="jsonParsed", max_supported_transaction_version=0).value
@@ -153,11 +145,6 @@ async def getTokens(str_signature: str):
             table = tabulate(data, headers='keys', tablefmt='fancy_grid')
             print(table)
             token_address = Token0 if str(Token0) not in sol_address else Token1
-            # REQUESTS = REQUESTS + 1
-            # print(f'Request #{REQUESTS}')
-            # if REQUESTS % 5 == 0: # sleep to avoid rate limit for rug_checker
-            #     await asyncio.sleep(1)
-            # await asyncio.sleep(2) # sleep to avoid rate limits
             token_info = _getTokenInfo(token_address=str(token_address))
             print(f"{datetime.now().strftime('%I:%M:%S %p')} - Token Info for {token_address}: {token_info}")
             logging.info(f'Token Info for {token_address}: {token_info}')
@@ -183,11 +170,12 @@ async def getTokens(str_signature: str):
                     if (liquidity >= min_liq):
                         mc_to_liq = result['fdv'] / liquidity
                         if mc_to_liq >= min_mc_to_liq:
+                            send_contract_to_tg(token_address=token_address, data=result)
                             file_path = f'{unfiltered_data_path}/token_addresses_unfiltered_{today}.csv'
                             save_token_address(result, file_path)
                             logging.info(f"Token address {token_address} created at {now} and saved to token_address_unfiltered_{today}.csv")
                             print(f"Token address {token_address} created at {now} and saved to token_address_unfiltered_{today}.csv")
-                            await asyncio.sleep(2)
+                            # await asyncio.sleep(2)
                             check, risks = rugcheck(token_address=token_address)
                             result['risks'] = risks
                             if check:
@@ -195,7 +183,6 @@ async def getTokens(str_signature: str):
                                 save_token_address(result, file_path)
                                 logging.info(f"Token address {token_address} created at {now} and saved to token_address_filtered_{today}.csv")
                                 print(f"Token address {token_address} created at {now} and saved to token_address_filtered_{today}.csv")
-                                send_contract_to_tg(token_address=token_address, data=result)
                             else:
                                 logging.warning(f'Skipping {token_address} because lp is not locked')
                                 print(f'Skipping {token_address} because lp is not locked')
@@ -213,54 +200,55 @@ async def getTokens(str_signature: str):
             break
 
 async def run():
-    async with websockets.connect(websocket_client, ping_interval=None) as websocket:
+    while True:
         try:
-            # Send subscription request
-            await websocket.send(json.dumps({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "logsSubscribe",
-                "params": [
-                    {"mentions": [wallet_address]},
-                    {"commitment": "finalized"}
-                ]
-            }))
-            first_resp = await websocket.recv()
-            response_dict = json.loads(first_resp)
-            if 'result' in response_dict:
-                print("Subscription successful. Subscription ID:", response_dict['result'])
-                logging.info(f"Subscription successful. Subscription ID: {response_dict['result']}")
-            # Continuously read from the WebSocket
-            async for response in websocket:
-                response_dict = json.loads(response)
-                if response_dict['params']['result']['value']['err'] is None:
-                    signature = response_dict['params']['result']['value']['signature']
-                    if signature not in seen_signatures:
-                        seen_signatures.add(signature)
-                        log_messages_set = set(response_dict['params']['result']['value']['logs'])
-                        search = "initialize2"
-                        if any(search in message for message in log_messages_set):
-                            logging.info(f"Tx: https://solscan.io/tx/{signature}")
-                            print(f"Tx: https://solscan.io/tx/{signature}")
-                            await getTokensWithBackoff(signature)
-                        else:
-                            pass
-            # await asyncio.sleep(1)
-        except websockets.ConnectionClosed as e:
-            logging.error(f'Terminated', e)
-            print(f'Terminated', e)
+            async with websockets.connect(websocket_client, ping_interval=None, ssl=ssl.SSLContext(ssl.PROTOCOL_TLS)) as websocket:
+                    # Send subscription request
+                    await websocket.send(json.dumps({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "logsSubscribe",
+                        "params": [
+                            {"mentions": [wallet_address]},
+                            {"commitment": "finalized"}
+                        ]
+                    }))
+                    first_resp = await websocket.recv()
+                    response_dict = json.loads(first_resp)
+                    if 'result' in response_dict:
+                        subscription_id = response_dict['result']
+                        print("Subscription successful. Subscription ID:", subscription_id)
+                        logging.info(f"Subscription successful. Subscription ID: {subscription_id}")
+                    # Continuously read from the WebSocket
+                    async for response in websocket:
+                        # try:
+                            response_dict = json.loads(response)
+                            if response_dict['params']['result']['value']['err'] is None:
+                                signature = response_dict['params']['result']['value']['signature']
+                                if signature not in seen_signatures:
+                                    seen_signatures.add(signature)
+                                    log_messages_set = set(response_dict['params']['result']['value']['logs'])
+                                    search = "initialize2"
+                                    if any(search in message for message in log_messages_set):
+                                        logging.info(f"Tx: https://solscan.io/tx/{signature}")
+                                        print(f"{datetime.now()} - Tx: https://solscan.io/tx/{signature}")
+                                        await getTokensWithBackoff(signature)
+                                    else:
+                                        pass
+        except (websockets.ProtocolError, websockets.ConnectionClosed, websockets.ConnectionClosedError) as err:
+            # Restart socket connection if ProtocolError: invalid status code
+            logging.error(err)  # Logging
+            print(f"Danger!", err)
+            continue
+
+        except KeyboardInterrupt:
+            if websocket:
+                await websocket.logs_unsubscribe(subscription_id)
+                await asyncio.sleep(1)
+            
         except Exception as e:
-            logging.error(e)
+            logging.error(f'Error exception triggered')
             print(e)
-        # TODO: Handle Keyboard Interrupt and CoonnectionCLosed Error
-        # except (websockets.ProtocolError, websockets.ConnectionClosedError) as err:
-        #     # Restart socket connection if ProtocolError: invalid status code
-        #     logging.error(err)  # Logging
-        #     print(f"Danger!", err)
-        #     continue
-        # except KeyboardInterrupt:
-        #     if websocket:
-        #         await websocket.logs_unsubscribe(subscription_id)
 
 async def main():
     await run()

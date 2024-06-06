@@ -10,5 +10,5 @@ Furthermore, the bot sends the filtered token address to telegram channel which 
 
 Run the bot
 ```bash
-python3 get_pools.py
+python3 get_new_pools.py
 ```

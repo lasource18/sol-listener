@@ -46,8 +46,6 @@ def _getTokenInfo(token_address: str):
     except Exception as e:
         print('Error in _getTokenInfo')
         print(e)
-    #     print('Exiting _getTokenInfo')
-    #     exit(1)
 
 def _getPairMetadata(pair_address: str, quote_token: str):
     try:

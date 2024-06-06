@@ -7,3 +7,8 @@ The bot uses definedfi API to retrieve information about the token and RugChecke
 It filters tokens with low liquidity and market cap as those tends to rug more often than others. After this intial filtering the token info is saved to a csv and some additional filtering is performed (rugcheck) to get better results.
 
 Furthermore, the bot sends the filtered token address to telegram channel which can be scraped for automatic execution using a trading bot.
+
+Run the bot
+```bash
+python3 get_pools.py
+```
